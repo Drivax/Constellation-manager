@@ -46,6 +46,59 @@ def plot_constellation_3d(positions: np.ndarray, output_path: str) -> None:
     plt.close(fig)
 
 
+def plot_line_constellation_3d(
+    positions: np.ndarray,
+    output_path: str,
+    title: str = "Satellite Chain State",
+) -> None:
+    """Plot 30-satellite chain in 3-D ECI space.
+
+    Unlike the full-constellation plot, this draws a line connecting
+    consecutive satellites to visualise the chain / straightness.
+    """
+    positions = np.asarray(positions, dtype=np.float32)
+    if positions.ndim != 2 or positions.shape[1] != 3:
+        raise ValueError("positions must have shape (N, 3)")
+
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection="3d")
+
+    _draw_earth(ax)
+
+    # Draw the chain line connecting satellites in order.
+    ax.plot(
+        positions[:, 0], positions[:, 1], positions[:, 2],
+        color="#e6ab02", linewidth=1.2, alpha=0.7, zorder=2,
+        label="chain",
+    )
+    # Draw individual satellite dots on top.
+    ax.scatter(
+        positions[:, 0], positions[:, 1], positions[:, 2],
+        s=20, c="#d95f02", alpha=1.0, zorder=3,
+    )
+    # Mark first and last satellite.
+    ax.scatter(*positions[0], s=55, c="#1b9e77", zorder=4, label="sat #0 (head)")
+    ax.scatter(*positions[-1], s=55, c="#7570b3", zorder=4, label="sat #29 (tail)")
+
+    max_range = float(np.max(np.linalg.norm(positions, axis=1))) * 1.1
+    ax.set_xlim([-max_range, max_range])
+    ax.set_ylim([-max_range, max_range])
+    ax.set_zlim([-max_range, max_range])
+    ax.set_xlabel("X (km)")
+    ax.set_ylabel("Y (km)")
+    ax.set_zlabel("Z (km)")
+    ax.set_title(title)
+    ax.legend(loc="upper left", fontsize=8)
+    ax.view_init(elev=30, azim=50)
+
+    plt.tight_layout()
+    plt.savefig(output, dpi=180)
+    plt.close(fig)
+
+
 def create_trajectory_gif(
     trajectories: np.ndarray,
     output_path: str,
