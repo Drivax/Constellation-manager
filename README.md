@@ -62,6 +62,17 @@ This keeps the learning problem manageable while still tied to real orbital data
 
 ### 2. Multi-agent control with MAPPO
 
+MAPPO means Multi-Agent Proximal Policy Optimization.
+It is a cooperative reinforcement learning method where several agents learn a shared policy with PPO-style updates, while a centralized critic estimates the value of the global state during training.
+In short, each satellite acts locally, but learning uses shared experience from the whole constellation to make policy updates more stable:
+
+$$
+\mathcal{L}_{\mathrm{MAPPO}}(\theta) = \mathbb{E}_t\left[\min\left(r_t(\theta)\hat{A}_t,\; \mathrm{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon)\hat{A}_t\right)\right]
+$$
+
+where $r_t(\theta)$ is the probability ratio between the new and old policy, and $\hat{A}_t$ is the advantage estimate.
+The clipping term prevents overly large policy updates, which is important when many agents learn simultaneously.
+
 Each satellite is treated as one agent.
 All agents share the same actor network.
 This reduces the number of parameters and makes training more stable.
@@ -344,6 +355,31 @@ The chain structure itself is preserved physically (the satellites stay in the c
 
 Increasing `train_iterations` to 100–200 in `config_line.py` would give the agent enough experience to discover the correction strategy.
 The `StraightLineEnv` reward is numerically well-scaled and the observation provides all necessary local information; the limiting factor is simply the amount of training.
+
+---
+
+## Comparative Summary
+
+Both experiments use the same MAPPO backbone but address different physical problems.
+This table brings all evaluation metrics into one place.
+
+| Metric | Step 1 — Phase & Altitude Control | Step 2 — Spacing Maintenance |
+|---|---|---|
+| **Scenario** | 100 Starlink sats, real SGP4 orbits | 30 sats, single Keplerian plane |
+| **Goal** | Equalise orbital phases, hold altitude | Keep inter-satellite gaps equal |
+| **Training iterations** | 12 | 15 |
+| **Episode reward** | −192.60 | −13.55 |
+| **Phase / spacing error (eval, mean)** | 1.564 rad | 0.073 (7.3 % of gap) |
+| **Phase / spacing error (eval, final)** | 1.677 rad | 0.143 (14.3 % of gap) |
+| **Straightness score (mean / final)** | — | 0.912 / 0.829 |
+| **Result verdict** | Stable baseline; phase not converged | Chain preserved; spacing drifts without control |
+
+**Reading the table:**
+
+- The episode rewards are not directly comparable: Step 1 accumulates over 100 agents and a complex multi-term reward, while Step 2 has 30 agents and a simpler spacing penalty. The absolute values carry little meaning across experiments.
+- The phase error of 1.564 rad in Step 1 is large (nearly 90°), confirming that 12 iterations are not enough to correct real constellation phases.
+- The spacing error of 7.3 % mean / 14.3 % final in Step 2 reflects a growing drift that the agent does not yet actively correct.
+- Both results are correct baselines for the amount of training performed. Increasing `train_iterations` to 100–200 in either config is the natural next step.
 
 ---
 
