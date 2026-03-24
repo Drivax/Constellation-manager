@@ -345,16 +345,16 @@ It starts near 0.987 and ends at 0.829 — a degradation of roughly 16 points ov
 
 ### Did Step 2 succeed?
 
-The result is an honest baseline — not yet a success, but a clear starting point.
+The result is an honest baseline, not yet a success, more like a  starting point.
 
 The spacing errors grow almost monotonically through the episode, which indicates the agent is not actively applying corrections to counter the slow differential drift induced by the altitude perturbations.
+
 It is likely holding or making small random actions rather than tracking the growing gaps.
+
 This is expected with only 15 training iterations on a problem that requires sustained, coordinated action over a 90-step horizon.
 
 The chain structure itself is preserved physically (the satellites stay in the correct orbital plane, the formation does not scatter), but the spacing maintenance task is not yet solved.
 
-Increasing `train_iterations` to 100–200 in `config_line.py` would give the agent enough experience to discover the correction strategy.
-The `StraightLineEnv` reward is numerically well-scaled and the observation provides all necessary local information; the limiting factor is simply the amount of training.
 
 ---
 
