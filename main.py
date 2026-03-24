@@ -15,6 +15,12 @@ from utils.visualization import create_trajectory_gif, plot_constellation_3d, pl
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train and evaluate the Constellation Manager MAPPO pipeline.")
     parser.add_argument(
+        "--num-satellites",
+        type=int,
+        default=None,
+        help="Override the number of satellites for scale testing, for example 300 or 500.",
+    )
+    parser.add_argument(
         "--resume-mode",
         choices=["none", "latest", "best"],
         default=None,
@@ -24,6 +30,11 @@ def parse_args() -> argparse.Namespace:
         "--resume-checkpoint-path",
         default=None,
         help="Resume training from an explicit checkpoint path.",
+    )
+    parser.add_argument(
+        "--disable-fault-injection",
+        action="store_true",
+        help="Disable injected actuator and orbit faults for ablation runs.",
     )
     return parser.parse_args()
 
@@ -35,6 +46,11 @@ def evaluate_policy(env: ConstellationEnv, agent, cfg: Config) -> dict:
     phase_series = [info["phase_error_mean"]]
     altitude_series = [info["altitude_error_mean"]]
     anomaly_series = [info["anomaly_mean"]]
+    collision_series = [info.get("collision_penalty_mean", 0.0)]
+    coverage_series = [info.get("coverage_penalty", 0.0)]
+    fault_series = [info.get("active_fault_fraction", 0.0)]
+    anomaly_event_series = [info.get("anomaly_event_fraction", 0.0)]
+    min_separation_series = [info.get("min_separation_km", 0.0)]
 
     for _ in range(cfg.max_steps):
         global_obs = obs.mean(axis=0).astype(np.float32)
@@ -45,18 +61,34 @@ def evaluate_policy(env: ConstellationEnv, agent, cfg: Config) -> dict:
         phase_series.append(info["phase_error_mean"])
         altitude_series.append(info["altitude_error_mean"])
         anomaly_series.append(info["anomaly_mean"])
+        collision_series.append(info.get("collision_penalty_mean", 0.0))
+        coverage_series.append(info.get("coverage_penalty", 0.0))
+        fault_series.append(info.get("active_fault_fraction", 0.0))
+        anomaly_event_series.append(info.get("anomaly_event_fraction", 0.0))
+        min_separation_series.append(info.get("min_separation_km", 0.0))
 
         if terminated or truncated:
             break
 
     return {
+        "num_satellites": int(env.num_satellites),
         "episode_reward": episode_reward,
         "phase_mean": float(np.mean(phase_series)),
         "altitude_mean": float(np.mean(altitude_series)),
         "anomaly_mean": float(np.mean(anomaly_series)),
+        "collision_penalty_mean": float(np.mean(collision_series)),
+        "coverage_penalty_mean": float(np.mean(coverage_series)),
+        "fault_fraction_mean": float(np.mean(fault_series)),
+        "anomaly_event_fraction_mean": float(np.mean(anomaly_event_series)),
+        "min_separation_km_min": float(np.min(min_separation_series)),
         "phase_series": [float(value) for value in phase_series],
         "altitude_series": [float(value) for value in altitude_series],
         "anomaly_series": [float(value) for value in anomaly_series],
+        "collision_series": [float(value) for value in collision_series],
+        "coverage_series": [float(value) for value in coverage_series],
+        "fault_series": [float(value) for value in fault_series],
+        "anomaly_event_series": [float(value) for value in anomaly_event_series],
+        "min_separation_series": [float(value) for value in min_separation_series],
         "trajectories": env.get_trajectories(),
         "final_positions": env.get_latest_positions(),
     }
@@ -65,21 +97,27 @@ def evaluate_policy(env: ConstellationEnv, agent, cfg: Config) -> dict:
 def save_evaluation_metrics(eval_stats: dict, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     serializable = {
-        "episode_reward": float(eval_stats["episode_reward"]),
-        "phase_mean": float(eval_stats["phase_mean"]),
-        "altitude_mean": float(eval_stats["altitude_mean"]),
-        "anomaly_mean": float(eval_stats["anomaly_mean"]),
-        "phase_series": eval_stats["phase_series"],
-        "altitude_series": eval_stats["altitude_series"],
-        "anomaly_series": eval_stats["anomaly_series"],
+        key: value
+        for key, value in eval_stats.items()
+        if key not in {"trajectories", "final_positions"}
     }
     output_path.write_text(json.dumps(serializable, indent=2), encoding="utf-8")
     return output_path
 
 
+def apply_runtime_overrides(cfg: Config, args: argparse.Namespace) -> None:
+    if args.num_satellites is not None:
+        cfg.num_satellites = args.num_satellites
+        cfg.output_dir = f"outputs/scaling_{args.num_satellites}"
+        cfg.checkpoint_dir = f"{cfg.output_dir}/checkpoints"
+    if args.disable_fault_injection:
+        cfg.enable_fault_injection = False
+
+
 def main() -> None:
     cfg = Config()
     args = parse_args()
+    apply_runtime_overrides(cfg, args)
 
     if args.resume_mode is not None:
         cfg.resume_mode = args.resume_mode
@@ -119,6 +157,11 @@ def main() -> None:
     print(f"- Mean phase error: {eval_stats['phase_mean']:.4f}")
     print(f"- Mean altitude error: {eval_stats['altitude_mean']:.4f}")
     print(f"- Mean anomaly score: {eval_stats['anomaly_mean']:.4f}")
+    print(f"- Mean collision penalty: {eval_stats['collision_penalty_mean']:.4f}")
+    print(f"- Mean coverage penalty: {eval_stats['coverage_penalty_mean']:.4f}")
+    print(f"- Mean active fault fraction: {eval_stats['fault_fraction_mean']:.4f}")
+    print(f"- Mean anomaly event fraction: {eval_stats['anomaly_event_fraction_mean']:.4f}")
+    print(f"- Minimum separation observed (km): {eval_stats['min_separation_km_min']:.2f}")
 
     print("\nArtifacts:")
     print(f"- 3D plot: {final_plot_path}")

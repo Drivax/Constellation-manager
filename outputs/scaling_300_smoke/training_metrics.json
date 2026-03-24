@@ -1,0 +1,53 @@
+{
+  "history": {
+    "mean_reward": [
+      -3.794765851910978
+    ],
+    "phase_error": [
+      1.5268001739608743
+    ],
+    "altitude_error": [
+      0.007646410117094465
+    ],
+    "anomaly": [
+      1.0306023359298706
+    ],
+    "collision_penalty": [
+      0.0
+    ],
+    "coverage_penalty": [
+      4.606671759741332
+    ],
+    "fault_fraction": [
+      0.0
+    ],
+    "anomaly_event_fraction": [
+      0.3883333206176758
+    ],
+    "actor_loss": [
+      -0.0035585705646212773
+    ],
+    "critic_loss": [
+      32.939473470052086
+    ],
+    "entropy": [
+      1.0928330024083455
+    ]
+  },
+  "rows": [
+    {
+      "iteration": 1,
+      "mean_reward": -3.794765851910978,
+      "phase_error": 1.5268001739608743,
+      "altitude_error": 0.007646410117094465,
+      "anomaly": 1.0306023359298706,
+      "collision_penalty": 0.0,
+      "coverage_penalty": 4.606671759741332,
+      "fault_fraction": 0.0,
+      "anomaly_event_fraction": 0.3883333206176758,
+      "actor_loss": -0.0035585705646212773,
+      "critic_loss": 32.939473470052086,
+      "entropy": 1.0928330024083455
+    }
+  ]
+}

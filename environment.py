@@ -70,8 +70,16 @@ class ConstellationEnv(gym.Env):
         self.latest_positions = np.zeros((self.num_satellites, 3), dtype=np.float32)
         self.latest_velocities = np.zeros((self.num_satellites, 3), dtype=np.float32)
         self.latest_anomaly = np.zeros(self.num_satellites, dtype=np.float32)
+        self.latest_collision_penalty = np.zeros(self.num_satellites, dtype=np.float32)
+        self.latest_coverage_penalty = 0.0
 
         self.trajectories: List[np.ndarray] = []
+
+        self.fault_start_steps = np.full(self.num_satellites, self.cfg.max_steps + 1, dtype=np.int32)
+        self.fault_end_steps = np.zeros(self.num_satellites, dtype=np.int32)
+        self.fault_phase_drifts = np.zeros(self.num_satellites, dtype=np.float32)
+        self.fault_radial_offsets = np.zeros(self.num_satellites, dtype=np.float32)
+        self.fault_actuation_scales = np.ones(self.num_satellites, dtype=np.float32)
 
         self.ae_input_dim = 6
         self.autoencoder = OrbitAutoencoder(
@@ -172,6 +180,86 @@ class ConstellationEnv(gym.Env):
         err = ((norm - recon) ** 2).mean(axis=1)
         return err.astype(np.float32)
 
+    def _sample_fault_scenarios(self) -> None:
+        self.fault_start_steps.fill(self.cfg.max_steps + 1)
+        self.fault_end_steps.fill(0)
+        self.fault_phase_drifts.fill(0.0)
+        self.fault_radial_offsets.fill(0.0)
+        self.fault_actuation_scales.fill(1.0)
+
+        if not self.cfg.enable_fault_injection:
+            return
+
+        selected = self.rng.random(self.num_satellites) < self.cfg.fault_probability
+        if not np.any(selected):
+            return
+
+        max_start = max(5, self.cfg.max_steps - self.cfg.fault_min_duration)
+        for idx in np.flatnonzero(selected):
+            start = int(self.rng.integers(5, max_start + 1))
+            duration = int(
+                self.rng.integers(
+                    self.cfg.fault_min_duration,
+                    self.cfg.fault_max_duration + 1,
+                )
+            )
+            end = min(self.cfg.max_steps, start + duration)
+            severity = float(self.rng.uniform(0.4, 1.0))
+
+            self.fault_start_steps[idx] = start
+            self.fault_end_steps[idx] = end
+            self.fault_phase_drifts[idx] = severity * self.cfg.fault_phase_drift_scale
+            self.fault_radial_offsets[idx] = severity * self.cfg.fault_radial_offset_km
+            self.fault_actuation_scales[idx] = 1.0 - severity * self.rng.uniform(
+                self.cfg.fault_actuation_loss_min,
+                self.cfg.fault_actuation_loss_max,
+            )
+
+    def _current_fault_mask(self) -> np.ndarray:
+        return (self.step_count >= self.fault_start_steps) & (self.step_count < self.fault_end_steps)
+
+    def _apply_fault_offsets(
+        self,
+        positions: np.ndarray,
+        velocities: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        fault_mask = self._current_fault_mask()
+        if not np.any(fault_mask):
+            return positions, velocities
+
+        positions = positions.copy()
+        velocities = velocities.copy()
+        radius = np.linalg.norm(positions, axis=1, keepdims=True)
+        unit_radius = positions / np.clip(radius, 1e-6, None)
+        positions[fault_mask] = positions[fault_mask] + unit_radius[fault_mask] * self.fault_radial_offsets[fault_mask, None]
+        velocities[fault_mask] = velocities[fault_mask] * self.fault_actuation_scales[fault_mask, None]
+        return positions, velocities
+
+    def _compute_collision_penalty(self, positions: np.ndarray) -> Tuple[np.ndarray, float]:
+        if self.num_satellites < 2:
+            return np.zeros(self.num_satellites, dtype=np.float32), float("inf")
+
+        deltas = positions[:, None, :] - positions[None, :, :]
+        distances = np.linalg.norm(deltas, axis=2)
+        np.fill_diagonal(distances, np.inf)
+
+        min_distances = distances.min(axis=1)
+        penalty = np.clip(
+            (self.cfg.collision_distance_km - min_distances) / self.cfg.collision_distance_km,
+            0.0,
+            None,
+        )
+        return penalty.astype(np.float32), float(min_distances.min())
+
+    def _compute_coverage_penalty(self, phases: np.ndarray) -> Tuple[float, float]:
+        sorted_phases = np.sort(np.mod(phases, 2.0 * np.pi))
+        wrapped = np.concatenate([sorted_phases, [sorted_phases[0] + 2.0 * np.pi]])
+        gaps = np.diff(wrapped)
+        ideal_gap = 2.0 * np.pi / max(1, self.num_satellites)
+        max_gap = float(np.max(gaps))
+        penalty = float(np.clip(max_gap / ideal_gap - 1.0, 0.0, 1.0))
+        return penalty, max_gap
+
     @staticmethod
     def _angle_wrap(x: np.ndarray) -> np.ndarray:
         return (x + np.pi) % (2.0 * np.pi) - np.pi
@@ -213,8 +301,10 @@ class ConstellationEnv(gym.Env):
         self.fuel = np.ones(self.num_satellites, dtype=np.float32)
         self.start_time = datetime.utcnow()
         self.trajectories = []
+        self._sample_fault_scenarios()
 
         positions, velocities = self._propagate_at_time(self.start_time)
+        positions, velocities = self._apply_fault_offsets(positions, velocities)
         self.latest_positions = positions.astype(np.float32)
         self.latest_velocities = velocities.astype(np.float32)
 
@@ -228,6 +318,11 @@ class ConstellationEnv(gym.Env):
         features = self._raw_feature_matrix(positions, velocities, phases)
         anomaly = self._compute_anomaly_scores(features)
         self.latest_anomaly = anomaly
+        collision_penalty, min_separation_km = self._compute_collision_penalty(positions)
+        coverage_penalty, max_gap = self._compute_coverage_penalty(phases)
+        self.latest_collision_penalty = collision_penalty
+        self.latest_coverage_penalty = coverage_penalty
+        fault_mask = self._current_fault_mask()
 
         obs = self._build_observation(phase_error, altitude_error, self.fuel, anomaly, phases)
         self.trajectories.append(self.latest_positions.copy())
@@ -236,6 +331,13 @@ class ConstellationEnv(gym.Env):
             "phase_error_mean": float(np.mean(np.abs(phase_error))),
             "altitude_error_mean": float(np.mean(np.abs(altitude_error))),
             "anomaly_mean": float(np.mean(anomaly)),
+            "collision_penalty_mean": float(np.mean(collision_penalty)),
+            "coverage_penalty": float(coverage_penalty),
+            "active_fault_count": int(np.sum(fault_mask)),
+            "active_fault_fraction": float(np.mean(fault_mask.astype(np.float32))),
+            "anomaly_event_fraction": float(np.mean((anomaly > self.cfg.anomaly_event_threshold).astype(np.float32))),
+            "min_separation_km": float(min_separation_km),
+            "max_gap_rad": float(max_gap),
         }
         return obs, info
 
@@ -249,13 +351,21 @@ class ConstellationEnv(gym.Env):
         command = actions - 1
         command = np.clip(command, -1, 1)
 
-        self.phase_offsets += command.astype(np.float32) * self.cfg.phase_gain
+        next_step = self.step_count + 1
+        fault_mask = (next_step >= self.fault_start_steps) & (next_step < self.fault_end_steps)
+        actuation_scale = np.ones(self.num_satellites, dtype=np.float32)
+        actuation_scale[fault_mask] = self.fault_actuation_scales[fault_mask]
+        effective_command = command.astype(np.float32) * actuation_scale
+
+        self.phase_offsets += effective_command * self.cfg.phase_gain
+        self.phase_offsets += np.where(fault_mask, self.fault_phase_drifts, 0.0)
         control_used = np.abs(command).astype(np.float32)
         self.fuel = np.clip(self.fuel - control_used * self.cfg.fuel_cost, 0.0, 1.0)
 
         self.step_count += 1
         current_time = self.start_time + timedelta(seconds=self.step_count * self.cfg.dt_seconds)
         positions, velocities = self._propagate_at_time(current_time)
+        positions, velocities = self._apply_fault_offsets(positions, velocities)
 
         self.latest_positions = positions.astype(np.float32)
         self.latest_velocities = velocities.astype(np.float32)
@@ -268,16 +378,25 @@ class ConstellationEnv(gym.Env):
         features = self._raw_feature_matrix(positions, velocities, phases)
         anomaly = self._compute_anomaly_scores(features)
         self.latest_anomaly = anomaly
+        collision_penalty, min_separation_km = self._compute_collision_penalty(positions)
+        coverage_penalty, max_gap = self._compute_coverage_penalty(phases)
+        self.latest_collision_penalty = collision_penalty
+        self.latest_coverage_penalty = coverage_penalty
+        anomaly_event_fraction = float(
+            np.mean((anomaly > self.cfg.anomaly_event_threshold).astype(np.float32))
+        )
 
         per_agent_reward = -(
             self.cfg.phase_weight * np.abs(phase_error)
             + self.cfg.altitude_weight * np.abs(altitude_error)
             + self.cfg.control_weight * control_used
             + self.cfg.anomaly_weight * anomaly
+            + self.cfg.collision_weight * collision_penalty
+            + self.cfg.coverage_weight * coverage_penalty
         )
 
         close_alignment = (np.abs(phase_error) < 0.05).astype(np.float32)
-        per_agent_reward += 0.1 * close_alignment
+        per_agent_reward += self.cfg.alignment_bonus * close_alignment
 
         reward = float(np.mean(per_agent_reward))
         terminated = self.step_count >= self.cfg.max_steps
@@ -291,6 +410,13 @@ class ConstellationEnv(gym.Env):
             "phase_error_mean": float(np.mean(np.abs(phase_error))),
             "altitude_error_mean": float(np.mean(np.abs(altitude_error))),
             "anomaly_mean": float(np.mean(anomaly)),
+            "collision_penalty_mean": float(np.mean(collision_penalty)),
+            "coverage_penalty": float(coverage_penalty),
+            "active_fault_count": int(np.sum(fault_mask)),
+            "active_fault_fraction": float(np.mean(fault_mask.astype(np.float32))),
+            "anomaly_event_fraction": anomaly_event_fraction,
+            "min_separation_km": float(min_separation_km),
+            "max_gap_rad": float(max_gap),
             "fuel_mean": float(np.mean(self.fuel)),
             "positions": self.latest_positions.copy(),
         }

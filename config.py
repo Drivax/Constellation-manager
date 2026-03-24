@@ -14,8 +14,23 @@ class Config:
     altitude_weight: float = 0.7
     control_weight: float = 0.05
     anomaly_weight: float = 0.6
+    collision_weight: float = 0.9
+    coverage_weight: float = 0.35
     phase_gain: float = 0.025
     fuel_cost: float = 0.003
+    alignment_bonus: float = 0.1
+    collision_distance_km: float = 25.0
+    anomaly_event_threshold: float = 1.2
+
+    # Fault injection
+    enable_fault_injection: bool = True
+    fault_probability: float = 0.08
+    fault_min_duration: int = 12
+    fault_max_duration: int = 36
+    fault_phase_drift_scale: float = 0.012
+    fault_radial_offset_km: float = 20.0
+    fault_actuation_loss_min: float = 0.25
+    fault_actuation_loss_max: float = 0.75
 
     # Autoencoder
     ae_hidden_dim: int = 16

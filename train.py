@@ -152,6 +152,10 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
         "phase_error": [],
         "altitude_error": [],
         "anomaly": [],
+        "collision_penalty": [],
+        "coverage_penalty": [],
+        "fault_fraction": [],
+        "anomaly_event_fraction": [],
         "actor_loss": [],
         "critic_loss": [],
         "entropy": [],
@@ -202,6 +206,10 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
         phase_acc = 0.0
         altitude_acc = 0.0
         anomaly_acc = 0.0
+        collision_acc = 0.0
+        coverage_acc = 0.0
+        fault_acc = 0.0
+        anomaly_event_acc = 0.0
 
         for _ in range(cfg.rollout_horizon):
             global_obs = obs.mean(axis=0).astype(np.float32)
@@ -227,6 +235,10 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
             phase_acc += float(info["phase_error_mean"])
             altitude_acc += float(info["altitude_error_mean"])
             anomaly_acc += float(info["anomaly_mean"])
+            collision_acc += float(info.get("collision_penalty_mean", 0.0))
+            coverage_acc += float(info.get("coverage_penalty", 0.0))
+            fault_acc += float(info.get("active_fault_fraction", 0.0))
+            anomaly_event_acc += float(info.get("anomaly_event_fraction", 0.0))
 
             obs = next_obs
             if done:
@@ -246,6 +258,10 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
         history["phase_error"].append(phase_acc / cfg.rollout_horizon)
         history["altitude_error"].append(altitude_acc / cfg.rollout_horizon)
         history["anomaly"].append(anomaly_acc / cfg.rollout_horizon)
+        history["collision_penalty"].append(collision_acc / cfg.rollout_horizon)
+        history["coverage_penalty"].append(coverage_acc / cfg.rollout_horizon)
+        history["fault_fraction"].append(fault_acc / cfg.rollout_horizon)
+        history["anomaly_event_fraction"].append(anomaly_event_acc / cfg.rollout_horizon)
         history["actor_loss"].append(update_stats["actor_loss"])
         history["critic_loss"].append(update_stats["critic_loss"])
         history["entropy"].append(update_stats["entropy"])
