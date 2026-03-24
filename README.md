@@ -13,12 +13,9 @@ Even a small error in phase, spacing, or control usage can accumulate over time.
 This project studies that problem in a simplified but still physically grounded setting.
 It uses real orbital data, real propagation equations, and a cooperative learning setup to explore how a set of agents could help maintain an organized constellation state.
 
-## Visual Context
-
-The image below shows Starlink satellites.
-It gives direct visual context for the kind of system studied in this project.
-
 ![Starlink satellites](utils/starlink.jpg)
+
+*The starlink constellation*
 
 ## Project Objective
 
