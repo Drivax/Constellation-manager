@@ -1,7 +1,11 @@
 # Constellation Manager
 
-For readers who are not familiar with space systems, a satellite constellation is a group of satellites that work together in orbit.
+A satellite constellation is a group of satellites that work together in orbit.
 They are used for communication, Earth observation, navigation, and scientific missions.
+
+The idea is older than many people expect.
+One of the first operational satellite constellations was Transit, a U.S. naval navigation system that became operational in 1964.
+It showed that multiple satellites could work together to provide a service that one satellite alone could not provide reliably.
 
 Managing a constellation is difficult because each satellite moves fast, has limited control authority, and still affects the quality of the global system.
 Even a small error in phase, spacing, or control usage can accumulate over time.
@@ -11,12 +15,10 @@ It uses real orbital data, real propagation equations, and a cooperative learnin
 
 ## Visual Context
 
-The images below are real spacecraft examples.
-They are here to give visual context before getting into the technical details.
+The image below shows Starlink satellites.
+It gives direct visual context for the kind of system studied in this project.
 
-![Hubble Space Telescope](https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/HST-SM4.jpeg/640px-HST-SM4.jpeg)
-
-![International Space Station](https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/International_Space_Station_after_undocking_of_STS-132.jpg/640px-International_Space_Station_after_undocking_of_STS-132.jpg)
+![Starlink satellites](utils/starlink.jpg)
 
 ## Project Objective
 
@@ -133,6 +135,16 @@ In practice, this helps the agent learn from delayed effects without making the 
 
 The values below come from the latest generated training and evaluation artifacts in the repository.
 
+The main metrics are the following.
+
+- Episode reward: the total cooperative score collected during one rollout. Less negative is better because the reward contains penalties.
+- Mean phase error: how far the satellites are from their target angular spacing. Lower is better.
+- Mean altitude error: how far the satellites are from the reference orbital shell. Lower is better.
+- Mean anomaly score: the average autoencoder reconstruction error. Lower is better because it means the observed states look closer to the nominal orbital patterns.
+- Actor loss: the policy optimization signal used by PPO. Its absolute value is less important than its stability across training.
+- Critic loss: the value-function fitting error. Lower is usually better, but it can stay relatively large in multi-agent settings with noisy rewards.
+- Entropy: a measure of action distribution spread. Higher entropy means more exploration. Lower entropy means the policy is becoming more confident.
+
 - Evaluation episode reward: `-192.5973`
 - Mean phase error: `1.5635`
 - Mean altitude error: `0.006316`
@@ -151,6 +163,29 @@ Final training values from the last saved iteration:
 These numbers should be read as a compact baseline.
 They are useful for checking that the pipeline is running correctly and producing consistent artifacts.
 
+From a performance point of view, the strongest result is the altitude stability.
+The mean altitude error stays very small, around `0.0063` in normalized form.
+This suggests that the learned controller is not producing large deviations from the reference shell.
+
+The phase error is more mixed.
+The evaluation mean phase error is `1.5635`, which is still fairly high.
+This means the constellation is not yet tightly organized in angular spacing.
+So the current policy should be seen as a first baseline, not as a fully optimized coordination policy.
+
+The anomaly score is also informative.
+During training it stays close to `0.89`, while during evaluation it rises to about `0.96`.
+That gap suggests the deterministic rollout visits states that are slightly less typical than the states seen during the training rollouts.
+This is not a failure, but it shows there is still room to improve robustness.
+
+The reward trend also supports this interpretation.
+Training rewards improve in some iterations, but they do not converge smoothly to a clearly better regime.
+That is common in a short MAPPO run with 100 agents and a simplified control space.
+
+Overall, the current performance is technically coherent.
+The pipeline runs end to end, the constraints remain controlled, and the outputs are stable enough to analyze.
+But the constellation coordination quality is still limited, especially on phase alignment.
+The project is therefore best viewed as a solid experimental baseline with realistic data and working infrastructure.
+
 ## Results and Graphs
 
 ### Final constellation snapshot
@@ -165,11 +200,21 @@ This graph shows how reward, phase error, and anomaly score evolve during traini
 
 ![Training metrics](outputs/training_metrics.png)
 
+The graph shows that the training process is stable enough to run without divergence.
+However, it also shows that the reward and phase metrics still fluctuate.
+This means the policy is learning something useful, but it has not yet reached a strong optimum.
+
+The anomaly curve remains in a narrow band.
+That is a good sign because it means the controller is not frequently pushing the constellation into clearly abnormal states.
+
 ### Animated rollout
 
 This GIF shows the constellation trajectory over time.
 
 ![Constellation animation](outputs/constellation_animation.gif)
+
+The rollout is visually useful for checking whether the learned behavior stays smooth over time.
+In this version, the motion remains structured, but the formation is still not as regular as one would want in a stronger controller.
 
 ## Repository Structure
 
@@ -220,14 +265,3 @@ python inference.py
 python inference.py --policy-path outputs/policy_actor.pt --steps 60
 ```
 
-Main output files:
-
-- `outputs/constellation_final.png`
-- `outputs/constellation_animation.gif`
-- `outputs/training_metrics.csv`
-- `outputs/training_metrics.json`
-- `outputs/training_metrics.png`
-- `outputs/evaluation_metrics.json`
-- `outputs/inference_metrics.json`
-- `outputs/policy_actor.pt`
-- `outputs/checkpoints/`
