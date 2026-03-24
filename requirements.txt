@@ -1,0 +1,7 @@
+numpy>=1.24
+requests>=2.31
+gymnasium>=0.29
+sgp4>=2.23
+torch>=2.2
+matplotlib>=3.8
+pillow>=10.0

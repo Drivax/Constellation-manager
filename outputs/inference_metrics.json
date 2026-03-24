@@ -1,0 +1,7 @@
+{
+  "policy_path": "outputs\\policy_actor.pt",
+  "episode_reward": -67.34501340496864,
+  "mean_phase_error": 1.6985502638240821,
+  "mean_anomaly_score": 0.9030669927597046,
+  "steps_executed": 30
+}
