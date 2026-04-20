@@ -136,14 +136,20 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
         ppo_epochs=cfg.ppo_epochs,
         minibatch_size=cfg.minibatch_size,
         max_grad_norm=cfg.max_grad_norm,
-        learning_rate=cfg.learning_rate,
+        learning_rate_start=float(getattr(cfg, "learning_rate_start", getattr(cfg, "learning_rate", 3e-4))),
+        learning_rate_end=float(getattr(cfg, "learning_rate_end", 1e-4)),
+        adam_eps=float(getattr(cfg, "adam_eps", 1e-5)),
+        value_clip_eps=float(getattr(cfg, "value_clip_eps", cfg.clip_eps)),
+        target_kl=float(getattr(cfg, "target_kl", 0.02)),
+        normalize_advantages=bool(getattr(cfg, "normalize_advantages", True)),
     )
 
     agent = MAPPOAgent(
         obs_dim=obs_dim,
         global_obs_dim=global_obs_dim,
         action_dim=cfg.action_dim,
-        hidden_dim=cfg.actor_hidden_dim,
+        actor_hidden_dim=cfg.actor_hidden_dim,
+        critic_hidden_dim=int(getattr(cfg, "critic_hidden_dim", cfg.actor_hidden_dim)),
         hparams=hparams,
     )
 
@@ -159,6 +165,10 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
         "actor_loss": [],
         "critic_loss": [],
         "entropy": [],
+        "approx_kl": [],
+        "clipfrac": [],
+        "explained_var": [],
+        "learning_rate": [],
     }
     checkpoint_dir = Path(cfg.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -192,6 +202,13 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
         print(f"Resuming training from checkpoint: {resume_path}")
 
     for iteration in range(start_iteration, cfg.train_iterations):
+        progress = iteration / max(1, cfg.train_iterations - 1)
+        learning_rate = (
+            hparams.learning_rate_start
+            + (hparams.learning_rate_end - hparams.learning_rate_start) * progress
+        )
+        agent.set_learning_rate(learning_rate)
+
         rollout = {
             "obs": [],
             "global_obs": [],
@@ -265,10 +282,14 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
         history["actor_loss"].append(update_stats["actor_loss"])
         history["critic_loss"].append(update_stats["critic_loss"])
         history["entropy"].append(update_stats["entropy"])
+        history["approx_kl"].append(update_stats["approx_kl"])
+        history["clipfrac"].append(update_stats["clipfrac"])
+        history["explained_var"].append(update_stats["explained_var"])
+        history["learning_rate"].append(learning_rate)
 
         print(
             "[Iter {}/{}] reward={:.4f} phase={:.4f} alt={:.4f} anom={:.4f} "
-            "actor={:.4f} critic={:.4f} ent={:.4f}".format(
+            "actor={:.4f} critic={:.4f} ent={:.4f} kl={:.5f} clip={:.3f} ev={:.3f} lr={:.2e}".format(
                 iteration + 1,
                 cfg.train_iterations,
                 history["mean_reward"][-1],
@@ -278,6 +299,10 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
                 history["actor_loss"][-1],
                 history["critic_loss"][-1],
                 history["entropy"][-1],
+                history["approx_kl"][-1],
+                history["clipfrac"][-1],
+                history["explained_var"][-1],
+                history["learning_rate"][-1],
             )
         )
 

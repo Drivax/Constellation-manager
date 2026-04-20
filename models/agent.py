@@ -10,29 +10,49 @@ import torch.optim as optim
 from torch.distributions import Categorical
 
 
+def _orthogonal_init(layer: nn.Module, gain: float = 1.0) -> None:
+    if isinstance(layer, nn.Linear):
+        nn.init.orthogonal_(layer.weight, gain=gain)
+        nn.init.constant_(layer.bias, 0.0)
+
+
 def build_actor_network(obs_dim: int, action_dim: int, hidden_dim: int) -> nn.Sequential:
-    return nn.Sequential(
+    actor = nn.Sequential(
         nn.Linear(obs_dim, hidden_dim),
         nn.Tanh(),
         nn.Linear(hidden_dim, hidden_dim),
         nn.Tanh(),
         nn.Linear(hidden_dim, action_dim),
     )
+    actor[0].apply(lambda module: _orthogonal_init(module, gain=np.sqrt(2.0)))
+    actor[2].apply(lambda module: _orthogonal_init(module, gain=np.sqrt(2.0)))
+    actor[4].apply(lambda module: _orthogonal_init(module, gain=0.01))
+    return actor
 
 
 class ActorCritic(nn.Module):
-    def __init__(self, obs_dim: int, global_obs_dim: int, action_dim: int, hidden_dim: int) -> None:
+    def __init__(
+        self,
+        obs_dim: int,
+        global_obs_dim: int,
+        action_dim: int,
+        actor_hidden_dim: int,
+        critic_hidden_dim: int,
+    ) -> None:
         super().__init__()
 
-        self.actor = build_actor_network(obs_dim, action_dim, hidden_dim)
+        self.actor = build_actor_network(obs_dim, action_dim, actor_hidden_dim)
 
         self.critic = nn.Sequential(
-            nn.Linear(global_obs_dim, hidden_dim),
+            nn.Linear(global_obs_dim, critic_hidden_dim),
             nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(critic_hidden_dim, critic_hidden_dim),
             nn.Tanh(),
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(critic_hidden_dim, 1),
         )
+        self.critic[0].apply(lambda module: _orthogonal_init(module, gain=np.sqrt(2.0)))
+        self.critic[2].apply(lambda module: _orthogonal_init(module, gain=np.sqrt(2.0)))
+        self.critic[4].apply(lambda module: _orthogonal_init(module, gain=1.0))
 
     def get_action_and_value(
         self,
@@ -62,7 +82,12 @@ class MAPPOHyperParams:
     ppo_epochs: int
     minibatch_size: int
     max_grad_norm: float
-    learning_rate: float
+    learning_rate_start: float
+    learning_rate_end: float
+    adam_eps: float
+    value_clip_eps: float
+    target_kl: float
+    normalize_advantages: bool
 
 
 class MAPPOAgent:
@@ -71,14 +96,29 @@ class MAPPOAgent:
         obs_dim: int,
         global_obs_dim: int,
         action_dim: int,
-        hidden_dim: int,
+        actor_hidden_dim: int,
+        critic_hidden_dim: int,
         hparams: MAPPOHyperParams,
         device: str = "cpu",
     ) -> None:
         self.device = torch.device(device)
         self.hparams = hparams
-        self.model = ActorCritic(obs_dim, global_obs_dim, action_dim, hidden_dim).to(self.device)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=hparams.learning_rate)
+        self.model = ActorCritic(
+            obs_dim=obs_dim,
+            global_obs_dim=global_obs_dim,
+            action_dim=action_dim,
+            actor_hidden_dim=actor_hidden_dim,
+            critic_hidden_dim=critic_hidden_dim,
+        ).to(self.device)
+        self.optimizer = optim.Adam(
+            self.model.parameters(),
+            lr=hparams.learning_rate_start,
+            eps=hparams.adam_eps,
+        )
+
+    def set_learning_rate(self, learning_rate: float) -> None:
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = float(learning_rate)
 
     def select_action(
         self,
@@ -88,7 +128,6 @@ class MAPPOAgent:
     ) -> Tuple[np.ndarray, np.ndarray, float]:
         obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device)
         global_t = torch.tensor(global_obs, dtype=torch.float32, device=self.device).unsqueeze(0)
-        global_t = global_t.repeat(obs_t.shape[0], 1)
 
         with torch.no_grad():
             logits = self.model.actor(obs_t)
@@ -98,7 +137,7 @@ class MAPPOAgent:
             else:
                 actions_t = dist.sample()
             log_prob_t = dist.log_prob(actions_t)
-            value_t = self.model.critic(global_t).mean().item()
+            value_t = self.model.critic(global_t).item()
 
         return actions_t.cpu().numpy(), log_prob_t.cpu().numpy(), float(value_t)
 
@@ -144,12 +183,16 @@ class MAPPOAgent:
         old_log_flat = old_log_probs.reshape(flat_size)
         adv_flat = np.repeat(advantages, num_agents)
         ret_flat = np.repeat(returns, num_agents)
+        old_val_flat = np.repeat(values, num_agents)
 
         actor_losses = []
         critic_losses = []
         entropies = []
+        approx_kls = []
+        clipfracs = []
 
         indices = np.arange(flat_size)
+        stop_early = False
 
         for _ in range(self.hparams.ppo_epochs):
             np.random.shuffle(indices)
@@ -163,15 +206,26 @@ class MAPPOAgent:
                 old_log_b = torch.tensor(old_log_flat[mb_idx], dtype=torch.float32, device=self.device)
                 adv_b = torch.tensor(adv_flat[mb_idx], dtype=torch.float32, device=self.device)
                 ret_b = torch.tensor(ret_flat[mb_idx], dtype=torch.float32, device=self.device)
+                old_val_b = torch.tensor(old_val_flat[mb_idx], dtype=torch.float32, device=self.device)
+
+                if self.hparams.normalize_advantages and adv_b.numel() > 1:
+                    adv_b = (adv_b - adv_b.mean()) / (adv_b.std(unbiased=False) + 1e-8)
 
                 _, new_log_b, entropy_b, value_b = self.model.get_action_and_value(obs_b, global_b, action=act_b)
 
-                ratio = torch.exp(new_log_b - old_log_b)
+                log_ratio = new_log_b - old_log_b
+                ratio = torch.exp(log_ratio)
                 surr1 = ratio * adv_b
                 surr2 = torch.clamp(ratio, 1.0 - self.hparams.clip_eps, 1.0 + self.hparams.clip_eps) * adv_b
                 actor_loss = -torch.min(surr1, surr2).mean()
 
-                critic_loss = ((value_b - ret_b) ** 2).mean()
+                value_pred_clipped = old_val_b + (value_b - old_val_b).clamp(
+                    -self.hparams.value_clip_eps,
+                    self.hparams.value_clip_eps,
+                )
+                value_losses = (value_b - ret_b) ** 2
+                value_losses_clipped = (value_pred_clipped - ret_b) ** 2
+                critic_loss = 0.5 * torch.max(value_losses, value_losses_clipped).mean()
                 entropy = entropy_b.mean()
 
                 loss = actor_loss + self.hparams.value_coef * critic_loss - self.hparams.entropy_coef * entropy
@@ -185,10 +239,31 @@ class MAPPOAgent:
                 critic_losses.append(float(critic_loss.item()))
                 entropies.append(float(entropy.item()))
 
+                with torch.no_grad():
+                    approx_kl = ((ratio - 1.0) - log_ratio).mean()
+                    clipfrac = ((ratio - 1.0).abs() > self.hparams.clip_eps).float().mean()
+                    approx_kls.append(float(approx_kl.item()))
+                    clipfracs.append(float(clipfrac.item()))
+
+                if self.hparams.target_kl > 0.0 and approx_kl.item() > self.hparams.target_kl:
+                    stop_early = True
+                    break
+            if stop_early:
+                break
+
+        with torch.no_grad():
+            global_eval_t = torch.tensor(global_flat, dtype=torch.float32, device=self.device)
+            values_pred = self.model.critic(global_eval_t).squeeze(-1).cpu().numpy()
+            var_returns = np.var(ret_flat)
+            explained_var = float(1.0 - np.var(ret_flat - values_pred) / (var_returns + 1e-8))
+
         return {
             "actor_loss": float(np.mean(actor_losses)) if actor_losses else 0.0,
             "critic_loss": float(np.mean(critic_losses)) if critic_losses else 0.0,
             "entropy": float(np.mean(entropies)) if entropies else 0.0,
+            "approx_kl": float(np.mean(approx_kls)) if approx_kls else 0.0,
+            "clipfrac": float(np.mean(clipfracs)) if clipfracs else 0.0,
+            "explained_var": explained_var,
             "mean_reward": float(np.mean(mean_rewards)),
         }
 

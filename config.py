@@ -42,7 +42,7 @@ class Config:
     actor_hidden_dim: int = 128
     critic_hidden_dim: int = 128
     action_dim: int = 3
-    train_iterations: int = 12
+    train_iterations: int = 24
     rollout_horizon: int = 32
     ppo_epochs: int = 3
     minibatch_size: int = 1024
@@ -52,7 +52,12 @@ class Config:
     entropy_coef: float = 0.01
     value_coef: float = 0.5
     max_grad_norm: float = 0.5
-    learning_rate: float = 3e-4
+    learning_rate_start: float = 3e-4
+    learning_rate_end: float = 1e-4
+    adam_eps: float = 1e-5
+    value_clip_eps: float = 0.2
+    target_kl: float = 0.02
+    normalize_advantages: bool = True
 
     # Output
     output_dir: str = "outputs"
