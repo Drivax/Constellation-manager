@@ -13,7 +13,7 @@ class Config:
     phase_weight: float = 1.0
     altitude_weight: float = 0.7
     control_weight: float = 0.05
-    anomaly_weight: float = 0.6
+    anomaly_weight: float = 0.3
     collision_weight: float = 0.9
     coverage_weight: float = 0.35
     phase_gain: float = 0.025
@@ -44,15 +44,15 @@ class Config:
     action_dim: int = 3
     train_iterations: int = 36
     rollout_horizon: int = 32
-    ppo_epochs: int = 3
-    minibatch_size: int = 1024
+    ppo_epochs: int = 5
+    minibatch_size: int = 512
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_eps: float = 0.2
     entropy_coef: float = 0.008
     value_coef: float = 0.5
     max_grad_norm: float = 0.5
-    learning_rate_start: float = 3e-4
+    learning_rate_start: float = 5e-4
     learning_rate_end: float = 5e-5
     adam_eps: float = 1e-5
     value_clip_eps: float = 0.2
