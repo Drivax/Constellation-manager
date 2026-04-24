@@ -10,6 +10,40 @@ import torch.optim as optim
 from torch.distributions import Categorical
 
 
+class RunningMeanStd:
+    """Welford online algorithm for running mean and variance of scalar sequences."""
+
+    def __init__(self) -> None:
+        self.mean: float = 0.0
+        self.var: float = 1.0
+        self.count: float = 1e-4
+
+    def update(self, x: np.ndarray) -> None:
+        x = np.asarray(x, dtype=np.float64).ravel()
+        batch_count = float(x.size)
+        batch_mean = float(x.mean())
+        batch_var = float(x.var())
+        total = self.count + batch_count
+        delta = batch_mean - self.mean
+        self.mean = self.mean + delta * batch_count / total
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        self.var = (m_a + m_b + delta ** 2 * self.count * batch_count / total) / total
+        self.count = total
+
+    @property
+    def std(self) -> float:
+        return float(np.sqrt(max(self.var, 1e-8)))
+
+    def state_dict(self) -> Dict[str, float]:
+        return {"mean": self.mean, "var": self.var, "count": self.count}
+
+    def load_state_dict(self, state: Dict[str, float]) -> None:
+        self.mean = float(state["mean"])
+        self.var = float(state["var"])
+        self.count = float(state["count"])
+
+
 def _orthogonal_init(layer: nn.Module, gain: float = 1.0) -> None:
     if isinstance(layer, nn.Linear):
         nn.init.orthogonal_(layer.weight, gain=gain)
@@ -88,6 +122,8 @@ class MAPPOHyperParams:
     value_clip_eps: float
     target_kl: float
     normalize_advantages: bool
+    normalize_rewards: bool
+    normalize_returns: bool
 
 
 class MAPPOAgent:
@@ -115,6 +151,8 @@ class MAPPOAgent:
             lr=hparams.learning_rate_start,
             eps=hparams.adam_eps,
         )
+        self.reward_rms = RunningMeanStd()
+        self.return_rms = RunningMeanStd()
 
     def set_learning_rate(self, learning_rate: float) -> None:
         for param_group in self.optimizer.param_groups:
@@ -171,6 +209,10 @@ class MAPPOAgent:
         values = rollout["values"]
 
         mean_rewards = rewards.mean(axis=1).astype(np.float32)
+        if self.hparams.normalize_rewards:
+            self.reward_rms.update(mean_rewards)
+            mean_rewards = mean_rewards / self.reward_rms.std
+
         advantages, returns = self._compute_gae(mean_rewards, dones, values, next_value)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -184,6 +226,13 @@ class MAPPOAgent:
         adv_flat = np.repeat(advantages, num_agents)
         ret_flat = np.repeat(returns, num_agents)
         old_val_flat = np.repeat(values, num_agents)
+
+        if self.hparams.normalize_returns:
+            self.return_rms.update(ret_flat)
+            ret_mean = float(self.return_rms.mean)
+            ret_std = self.return_rms.std
+            ret_flat = (ret_flat - ret_mean) / ret_std
+            old_val_flat = (old_val_flat - ret_mean) / ret_std
 
         actor_losses = []
         critic_losses = []

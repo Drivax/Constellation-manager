@@ -58,6 +58,8 @@ class Config:
     value_clip_eps: float = 0.2
     target_kl: float = 0.015
     normalize_advantages: bool = True
+    normalize_rewards: bool = True
+    normalize_returns: bool = True
 
     # Output
     output_dir: str = "outputs"

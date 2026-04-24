@@ -23,11 +23,18 @@ def save_checkpoint(
 ) -> Path:
     checkpoint_file = Path(checkpoint_path)
     checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+    normalizer_state: Dict[str, object] = {}
+    if hasattr(agent, "reward_rms"):
+        normalizer_state["reward_rms"] = agent.reward_rms.state_dict()
+    if hasattr(agent, "return_rms"):
+        normalizer_state["return_rms"] = agent.return_rms.state_dict()
+
     torch.save(
         {
             "iteration": iteration,
             "model_state_dict": agent.model.state_dict(),
             "optimizer_state_dict": agent.optimizer.state_dict(),
+            "normalizer_state": normalizer_state,
             "history": history,
             "best_reward": best_reward,
             "config": cfg.__dict__,
@@ -51,6 +58,12 @@ def load_checkpoint(
     optimizer_state = checkpoint.get("optimizer_state_dict")
     if optimizer_state is not None:
         agent.optimizer.load_state_dict(optimizer_state)
+
+    normalizer_state = checkpoint.get("normalizer_state", {})
+    if hasattr(agent, "reward_rms") and "reward_rms" in normalizer_state:
+        agent.reward_rms.load_state_dict(normalizer_state["reward_rms"])
+    if hasattr(agent, "return_rms") and "return_rms" in normalizer_state:
+        agent.return_rms.load_state_dict(normalizer_state["return_rms"])
 
     return checkpoint
 
@@ -142,6 +155,8 @@ def train_mappo(env: ConstellationEnv, cfg: Config) -> Tuple[MAPPOAgent, Dict[st
         value_clip_eps=float(getattr(cfg, "value_clip_eps", cfg.clip_eps)),
         target_kl=float(getattr(cfg, "target_kl", 0.02)),
         normalize_advantages=bool(getattr(cfg, "normalize_advantages", True)),
+        normalize_rewards=bool(getattr(cfg, "normalize_rewards", True)),
+        normalize_returns=bool(getattr(cfg, "normalize_returns", True)),
     )
 
     agent = MAPPOAgent(
