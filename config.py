@@ -42,7 +42,7 @@ class Config:
     actor_hidden_dim: int = 128
     critic_hidden_dim: int = 128
     action_dim: int = 3
-    train_iterations: int = 36
+    train_iterations: int = 100
     rollout_horizon: int = 32
     ppo_epochs: int = 5
     minibatch_size: int = 512
