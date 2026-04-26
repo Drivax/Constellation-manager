@@ -257,7 +257,10 @@ class ConstellationEnv(gym.Env):
         gaps = np.diff(wrapped)
         ideal_gap = 2.0 * np.pi / max(1, self.num_satellites)
         max_gap = float(np.max(gaps))
-        penalty = float(np.clip(max_gap / ideal_gap - 1.0, 0.0, 1.0))
+        # Penalize non-uniform spacing using a scale-free variance term.
+        # This remains informative (non-saturating) even when the largest gap is far from ideal.
+        normalized_gap_error = (gaps - ideal_gap) / (ideal_gap + 1e-8)
+        penalty = float(np.mean(np.square(normalized_gap_error)))
         return penalty, max_gap
 
     @staticmethod
