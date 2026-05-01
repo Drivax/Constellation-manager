@@ -257,10 +257,19 @@ class ConstellationEnv(gym.Env):
         gaps = np.diff(wrapped)
         ideal_gap = 2.0 * np.pi / max(1, self.num_satellites)
         max_gap = float(np.max(gaps))
-        # Penalize non-uniform spacing using a scale-free variance term.
-        # This remains informative (non-saturating) even when the largest gap is far from ideal.
-        normalized_gap_error = (gaps - ideal_gap) / (ideal_gap + 1e-8)
-        penalty = float(np.mean(np.square(normalized_gap_error)))
+        metric = str(getattr(self.cfg, "coverage_metric", "gap_variance"))
+
+        if metric == "max_gap":
+            penalty = float(np.clip(max_gap / ideal_gap - 1.0, 0.0, 1.0))
+        elif metric == "gap_variance":
+            # Penalize non-uniform spacing using a scale-free variance term.
+            # This remains informative (non-saturating) even when the largest gap is far from ideal.
+            normalized_gap_error = (gaps - ideal_gap) / (ideal_gap + 1e-8)
+            penalty = float(np.mean(np.square(normalized_gap_error)))
+        else:
+            raise ValueError(
+                f"Unsupported coverage_metric='{metric}'. Use 'max_gap' or 'gap_variance'."
+            )
         return penalty, max_gap
 
     @staticmethod
@@ -302,7 +311,10 @@ class ConstellationEnv(gym.Env):
         self.step_count = 0
         self.phase_offsets = np.zeros(self.num_satellites, dtype=np.float32)
         self.fuel = np.ones(self.num_satellites, dtype=np.float32)
-        self.start_time = datetime.utcnow()
+        if options is not None and "start_time" in options:
+            self.start_time = options["start_time"]
+        else:
+            self.start_time = datetime.utcnow()
         self.trajectories = []
         self._sample_fault_scenarios()
 

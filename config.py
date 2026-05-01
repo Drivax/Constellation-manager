@@ -16,6 +16,7 @@ class Config:
     anomaly_weight: float = 0.3
     collision_weight: float = 0.9
     coverage_weight: float = 0.35
+    coverage_metric: str = "gap_variance"
     phase_gain: float = 0.025
     fuel_cost: float = 0.003
     alignment_bonus: float = 0.1
