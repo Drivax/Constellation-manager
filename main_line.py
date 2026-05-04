@@ -43,6 +43,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Resume from an explicit checkpoint path.",
     )
+    parser.add_argument(
+        "--num-satellites",
+        type=int,
+        default=None,
+        help="Override the number of satellites (also switches the output directory).",
+    )
     return parser.parse_args()
 
 
@@ -93,12 +99,25 @@ def main() -> None:
         cfg.resume_mode = args.resume_mode
     if args.resume_checkpoint_path is not None:
         cfg.resume_checkpoint_path = args.resume_checkpoint_path
+    if args.num_satellites is not None:
+        cfg.num_satellites = args.num_satellites
+        cfg.output_dir = f"outputs/step2_{args.num_satellites}"
+        cfg.checkpoint_dir = f"outputs/step2_{args.num_satellites}/checkpoints"
 
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Initialising straight-line environment (30 satellites, one orbital plane)...")
+    print(f"Initialising straight-line environment ({cfg.num_satellites} satellites, one orbital plane)...")
     env = StraightLineEnv(cfg)
+
+    # Capture initial state before any training
+    env.reset(seed=cfg.seed)
+    initial_plot_path = output_dir / "line_initial.png"
+    plot_line_constellation_3d(
+        env.get_latest_positions(),
+        str(initial_plot_path),
+        title=f"Initial Chain State ({cfg.num_satellites} satellites)",
+    )
 
     print("Starting MAPPO training — Step 2...")
     agent, history, artifact_paths = train_mappo(env, cfg)

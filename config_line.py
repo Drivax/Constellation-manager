@@ -4,7 +4,7 @@ from dataclasses import dataclass
 @dataclass
 class ConfigLine:
     # ---- Scenario -------------------------------------------------------
-    num_satellites: int = 30
+    num_satellites: int = 100
     max_steps: int = 90
     dt_seconds: int = 60
     seed: int = 42

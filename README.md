@@ -289,8 +289,8 @@ So the final result should be described as a solid baseline and a partial succes
 When SpaceX launches a new batch of Starlink satellites they appear in the sky as a luminous chain moving in a line across the horizon — the famous Starlink train.
 This second experiment takes that image as its starting point.
 
-- **30 satellites** are placed in a single circular orbital plane (altitude 550 km, inclination 53° — same shell as Starlink).
-- At launch they are evenly spaced by roughly 0.29° each (~34 km gaps), spanning about 8.3° of arc.
+- **100 satellites** are placed in a single circular orbital plane (altitude 550 km, inclination 53° — same shell as Starlink).
+- At launch they are evenly spaced by roughly 0.29° each (~34 km gaps), spanning about 28.4° of arc.
 - Each satellite is assigned a **slightly different natural altitude** (drawn from a Gaussian with σ = 0.5 km), giving it a slightly different orbital period.
   Without any control the gaps between satellites slowly drift and the chain bends.
 - **Goal**: keep the inter-satellite gaps equal at all times — keep the line straight.
@@ -329,11 +329,11 @@ A score of 1.0 means all gaps are perfectly equal. A score below 0.9 indicates v
 
 ### Initial chain state
 
-The image below shows the 30 satellites at $t = 0$, before any learned control.
-The green dot is satellite #0 (head of the chain); the purple dot is satellite #29 (tail).
+The image below shows the 100 satellites at $t = 0$, before any learned control.
+The green dot is satellite #0 (head of the chain); the purple dot is satellite #99 (tail).
 The connecting line highlights the chain character of the formation.
 
-At initialisation the straightness score is **0.987** and the total arc span is **8.3°**.
+At initialisation the total arc span is **28.4°**.
 
 ![Initial chain state](outputs/step2/line_initial.png)
 
@@ -344,8 +344,8 @@ Because the environment is lightweight (no SGP4, no autoencoder) each iteration 
 
 ![Step 2 training metrics](outputs/step2/line_training_metrics.png)
 
-The reward fluctuates between roughly −0.37 and −0.72 across the 15 iterations, with no strong monotone trend.
-The spacing error (phase column in the chart) oscillates around 0.30–0.47.
+The reward fluctuates between roughly −0.32 and −0.74 across the 15 iterations, with no strong monotone trend.
+The spacing error oscillates around 0.19–0.48.
 This is consistent with a policy that has not yet converged to an active correction strategy in so few iterations.
 
 ### Final chain state
@@ -360,18 +360,18 @@ This is consistent with a policy that has not yet converged to an active correct
 
 | Metric | Value |
 |--------|-------|
-| Episode reward | −13.55 |
-| Mean spacing error (normalised) | 0.073 |
-| Final spacing error | 0.143 |
-| Mean straightness score | 0.912 |
-| Final straightness score | 0.829 |
+| Episode reward | −10.47 |
+| Mean spacing error (normalised) | 0.082 |
+| Final spacing error | 0.162 |
+| Mean straightness score | 0.898 |
+| Final straightness score | 0.800 |
 
 **Spacing error** measures how much the average inter-satellite gap deviates from the desired gap, as a fraction of that gap.
-A value of 0.073 means on average the gaps are off by 7.3 % of their target.
-A value of 0.143 at the end of the episode means the drift has accumulated to 14.3 %, which is noticeable.
+A value of 0.082 means on average the gaps are off by 8.2 % of their target.
+A value of 0.162 at the end of the episode means the drift has accumulated to 16.2 %, which is noticeable.
 
-**Straightness score** measures uniformity of all 29 gaps simultaneously.
-It starts near 0.987 and ends at 0.829 — a degradation of roughly 16 points over 90 steps.
+**Straightness score** measures uniformity of all 99 gaps simultaneously.
+It ends at 0.800 — a degradation over the 90-step episode.
 
 ### Did Step 2 succeed?
 
@@ -388,27 +388,90 @@ The chain structure itself is preserved physically (the satellites stay in the c
 
 ---
 
+## Step 3 — Scaling to 1000 Satellites
+
+### Scenario
+
+The third experiment pushes the straight-line chain to its physical limit at the current training budget.
+
+- **1000 satellites** are placed in a single circular orbital plane (altitude 550 km, inclination 53°).
+- At launch they are evenly spaced by 0.29° each (~34 km gaps), spanning approximately **286°** of arc — nearly a full orbital ring.
+- The same altitude-noise perturbation (σ = 0.5 km) is applied at reset, inducing differential drift.
+- The shared policy architecture (identical to Steps 1 and 2) is used unchanged.
+
+This run is a deliberate stress test.
+With 1000 agents sharing the same policy and 15 training iterations, convergence is not expected.
+The goal is to characterise how gracefully the pipeline scales and what metrics degrade under this load.
+
+### Initial chain state
+
+![Initial chain state (1000 satellites)](outputs/step2_1000/line_initial.png)
+
+### Training
+
+![Step 3 training metrics](outputs/step2_1000/line_training_metrics.png)
+
+With 1000 satellites the reward signal is noisier: values range from roughly −0.37 to −1.16 across the 15 iterations.
+The spacing error oscillates between 0.19 and 0.75 — a wider band than the 100-satellite case, reflecting the greater difficulty of coordinating ten times as many agents.
+
+### Final chain state
+
+![Final chain state (1000 satellites)](outputs/step2_1000/line_final.png)
+
+### Animated rollout
+
+![Step 3 animation](outputs/step2_1000/line_animation.gif)
+
+### Evaluation metrics
+
+| Metric | Value |
+|--------|-------|
+| Episode reward | −24.30 |
+| Mean spacing error (normalised) | 0.153 |
+| Final spacing error | 0.430 |
+| Mean straightness score | 0.789 |
+| Final straightness score | 0.411 |
+
+Compared with the 100-satellite baseline, every metric degrades noticeably.
+The mean spacing error nearly doubles (8.2 % → 15.3 %) and the final straightness score drops from 0.800 to 0.411.
+At 0.411 the formation shows significant bunching: roughly half the gap-uniformity of a perfect line has been lost by the end of the episode.
+
+### Did Step 3 succeed?
+
+No, and that is by design.
+
+The 1000-satellite run demonstrates the scaling wall of the current setup.
+With a fixed 15-iteration training budget and an identical network architecture, the shared policy cannot coordinate ten times as many agents over a 90-step horizon.
+The chain drifts substantially before the episode ends.
+
+The positive finding is that the pipeline itself scales without code changes: the same `main_line.py` entry point, the same MAPPO loop, and the same visualisation tools all handle 1000 agents.
+The bottleneck is purely in the amount of training, not in the infrastructure.
+
+Increasing `train_iterations` to 100–200 and potentially widening the network (`actor_hidden_dim`) would be the natural next steps for this scale.
+
+---
+
 ## Comparative Summary
 
 Both experiments use the same MAPPO backbone but address different physical problems.
 This table brings all evaluation metrics into one place.
 
-| Metric | Step 1 — Phase & Altitude Control | Step 2 — Spacing Maintenance |
-|---|---|---|
-| **Scenario** | 100 Starlink sats, real SGP4 orbits | 30 sats, single Keplerian plane |
-| **Goal** | Equalise orbital phases, hold altitude | Keep inter-satellite gaps equal |
-| **Training iterations** | 12 | 15 |
-| **Episode reward** | −192.60 | −13.55 |
-| **Phase / spacing error (eval, mean)** | 1.564 rad | 0.073 (7.3 % of gap) |
-| **Phase / spacing error (eval, final)** | 1.677 rad | 0.143 (14.3 % of gap) |
-| **Straightness score (mean / final)** | — | 0.912 / 0.829 |
-| **Result verdict** | Stable baseline; phase not converged | Chain preserved; spacing drifts without control |
+| Metric | Step 1 — Phase & Altitude Control | Step 2 — 100-Sat Chain | Step 3 — 1000-Sat Chain |
+|---|---|---|---|
+| **Scenario** | 100 Starlink sats, real SGP4 orbits | 100 sats, single Keplerian plane | 1000 sats, single Keplerian plane |
+| **Goal** | Equalise orbital phases, hold altitude | Keep inter-satellite gaps equal | Keep inter-satellite gaps equal |
+| **Training iterations** | 12 | 15 | 15 |
+| **Episode reward** | −192.60 | −10.47 | −24.30 |
+| **Phase / spacing error (eval, mean)** | 1.564 rad | 0.082 (8.2 % of gap) | 0.153 (15.3 % of gap) |
+| **Phase / spacing error (eval, final)** | 1.677 rad | 0.162 (16.2 % of gap) | 0.430 (43.0 % of gap) |
+| **Straightness score (mean / final)** | — | 0.898 / 0.800 | 0.789 / 0.411 |
+| **Result verdict** | Stable baseline; phase not converged | Chain preserved; spacing drifts | Chain preserved; spacing degrades significantly |
 
 **Reading the table:**
 
-- The episode rewards are not directly comparable: Step 1 accumulates over 100 agents and a complex multi-term reward, while Step 2 has 30 agents and a simpler spacing penalty. The absolute values carry little meaning across experiments.
+- The episode rewards are not directly comparable: Step 1 accumulates over 100 agents and a complex multi-term reward, while Step 2 has 100 agents and a simpler spacing penalty. The absolute values carry little meaning across experiments.
 - The phase error of 1.564 rad in Step 1 is large (nearly 90°), confirming that 12 iterations are not enough to correct real constellation phases.
-- The spacing error of 7.3 % mean / 14.3 % final in Step 2 reflects a growing drift that the agent does not yet actively correct.
+- The spacing error of 8.2 % mean / 16.2 % final in Step 2 reflects a growing drift that the agent does not yet actively correct.
 - Both results are correct baselines for the amount of training performed. Increasing `train_iterations` to 100–200 in either config is the natural next step.
 
 ---
@@ -425,7 +488,7 @@ Constellation-manager/
 ├── main_line.py          ← Step 2 entry point
 ├── inference.py          ← Step 1 inference script
 ├── environment.py        ← Step 1 environment (100 Starlink sats, SGP4)
-├── environment_line.py   ← Step 2 environment (30 sats, Keplerian)
+├── environment_line.py   ← Step 2 environment (100 sats, Keplerian)
 ├── train.py              ← Shared MAPPO training loop
 ├── data/
 ├── models/
@@ -435,7 +498,8 @@ Constellation-manager/
 │   └── visualization.py
 └── outputs/
     ├── ...               ← Step 1 artefacts
-    └── step2/            ← Step 2 artefacts
+    ├── step2/            ← Step 2 artefacts (100 satellites)
+    └── step2_1000/       ← Step 3 artefacts (1000 satellites)
 ```
 
 ## Installation and Execution
@@ -476,11 +540,18 @@ python inference.py
 python inference.py --policy-path outputs/policy_actor.pt --steps 60
 ```
 
-**Step 2** — 30-satellite straight-line chain (spacing maintenance):
+**Step 2** — 100-satellite straight-line chain (spacing maintenance):
 
 ```bash
 python main_line.py
 python main_line.py --resume-mode latest
 python main_line.py --resume-mode best
+```
+
+**Step 3** — 1000-satellite straight-line chain (scaling stress test):
+
+```bash
+python main_line.py --num-satellites 1000
+python main_line.py --num-satellites 1000 --resume-mode latest
 ```
 
