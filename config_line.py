@@ -37,13 +37,13 @@ class ConfigLine:
     phase_gain: float = 0.0003
 
     # ---- Agent architecture ---------------------------------------------
-    actor_hidden_dim: int = 128
+    actor_hidden_dim: int = 256
     critic_hidden_dim: int = 128
     action_dim: int = 3  # 0 = retard, 1 = hold, 2 = advance
 
     # ---- MAPPO training -------------------------------------------------
-    train_iterations: int = 15
-    rollout_horizon: int = 32
+    train_iterations: int = 100
+    rollout_horizon: int = 64
     ppo_epochs: int = 3
     minibatch_size: int = 512
     gamma: float = 0.99
