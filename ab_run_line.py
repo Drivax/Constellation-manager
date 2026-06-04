@@ -21,8 +21,9 @@ A summary table is printed at the end and written to
 """
 from __future__ import annotations
 
-import copy
+import argparse
 import json
+from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 
@@ -54,6 +55,54 @@ ARM_SPECS: list[dict] = [
 
 BASELINE_EVAL_PATH = Path("outputs/step2/line_evaluation_metrics.json")
 BASELINE_LABEL = "Baseline (horizon=64, 100 iters — current)"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run rollout-horizon A/B experiments for the straight-line constellation "
+            "with optional multi-seed aggregation."
+        )
+    )
+    parser.add_argument(
+        "--seeds",
+        default="42",
+        help="Comma-separated random seeds to run, e.g. '42,1337,2025'.",
+    )
+    parser.add_argument(
+        "--arms",
+        nargs="+",
+        choices=[spec["name"] for spec in ARM_SPECS],
+        default=None,
+        help="Subset of arms to run. Defaults to all defined arms.",
+    )
+    parser.add_argument(
+        "--baseline-eval-path",
+        default=str(BASELINE_EVAL_PATH),
+        help="Path to baseline evaluation JSON. Use empty string to disable baseline loading.",
+    )
+    parser.add_argument(
+        "--summary-path",
+        default="outputs/ab_summary.json",
+        help="Where to write the A/B summary JSON.",
+    )
+    return parser.parse_args()
+
+
+def parse_seed_list(raw_seeds: str) -> list[int]:
+    seeds: list[int] = []
+    for token in raw_seeds.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            seeds.append(int(token))
+        except ValueError as exc:
+            raise ValueError(f"Invalid seed '{token}'. Seeds must be integers.") from exc
+
+    if not seeds:
+        raise ValueError("At least one seed is required.")
+    return seeds
 
 
 # ---------------------------------------------------------------------------
@@ -90,14 +139,16 @@ def evaluate_policy(env: StraightLineEnv, agent, cfg: ConfigLine) -> dict:
 # ---------------------------------------------------------------------------
 # Run one arm
 # ---------------------------------------------------------------------------
-def run_arm(spec: dict, base_cfg: ConfigLine) -> dict:
+def run_arm(spec: dict, base_cfg: ConfigLine, seed: int, use_seed_subdir: bool) -> dict:
     print(f"\n{'=' * 60}")
     print(f"  {spec['label']}")
     print(f"{'=' * 60}")
 
     # Build config for this arm
     output_dir = f"outputs/{spec['output_subdir']}"
-    checkpoint_dir = f"outputs/{spec['output_subdir']}/checkpoints"
+    if use_seed_subdir:
+        output_dir = f"{output_dir}/seed{seed}"
+    checkpoint_dir = f"{output_dir}/checkpoints"
 
     cfg = replace(
         base_cfg,
@@ -105,6 +156,7 @@ def run_arm(spec: dict, base_cfg: ConfigLine) -> dict:
         checkpoint_dir=checkpoint_dir,
         metrics_json_name="line_training_metrics.json",
         metrics_csv_name="line_training_metrics.csv",
+        seed=seed,
         evaluation_json_name="line_evaluation_metrics.json",
         latest_checkpoint_name="line_mappo_latest.pt",
         best_checkpoint_name="line_mappo_best.pt",
@@ -133,7 +185,9 @@ def run_arm(spec: dict, base_cfg: ConfigLine) -> dict:
     eval_path.write_text(json.dumps(eval_stats, indent=2), encoding="utf-8")
 
     result = {
+        "arm_name": spec["name"],
         "label": spec["label"],
+        "seed": seed,
         "rollout_horizon": cfg.rollout_horizon,
         "train_iterations": cfg.train_iterations,
         "total_env_steps": total_env_steps,
@@ -143,6 +197,45 @@ def run_arm(spec: dict, base_cfg: ConfigLine) -> dict:
         "output_dir": output_dir,
     }
     return result
+
+
+def aggregate_by_arm_seed(results: list[dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = defaultdict(list)
+    for row in results:
+        grouped[row["arm_name"]].append(row)
+
+    metric_keys = [
+        "episode_reward",
+        "spacing_error_mean",
+        "spacing_error_final",
+        "straightness_mean",
+        "straightness_final",
+        "final_mean_reward_train",
+        "final_spacing_error_train",
+    ]
+
+    aggregated: list[dict] = []
+    for arm_name, rows in grouped.items():
+        sample = rows[0]
+        agg_row = {
+            "arm_name": arm_name,
+            "label": f"{sample['label']} [mean over {len(rows)} seeds]",
+            "rollout_horizon": sample["rollout_horizon"],
+            "train_iterations": sample["train_iterations"],
+            "total_env_steps": sample["total_env_steps"],
+            "n_seeds": len(rows),
+        }
+        for key in metric_keys:
+            values = [float(r[key]) for r in rows if key in r and r[key] is not None]
+            if not values:
+                continue
+            mean_val = float(np.mean(values))
+            std_val = float(np.std(values, ddof=0))
+            agg_row[key] = mean_val
+            agg_row[f"{key}_std"] = std_val
+        aggregated.append(agg_row)
+
+    return sorted(aggregated, key=lambda x: x["arm_name"])
 
 
 # ---------------------------------------------------------------------------
@@ -199,18 +292,38 @@ def print_summary(results: list[dict], baseline: dict | None) -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
+    args = parse_args()
     base_cfg = ConfigLine()  # canonical defaults
 
+    try:
+        seeds = parse_seed_list(args.seeds)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    selected_arm_specs = ARM_SPECS
+    if args.arms:
+        selected_names = set(args.arms)
+        selected_arm_specs = [spec for spec in ARM_SPECS if spec["name"] in selected_names]
+
+    multi_seed = len(seeds) > 1
+    print(f"Running A/B experiment with seeds: {seeds}")
+    if multi_seed:
+        print("Multi-seed mode enabled: per-seed outputs are stored in seed-specific subfolders.")
+
     results: list[dict] = []
-    for spec in ARM_SPECS:
-        result = run_arm(spec, base_cfg)
-        results.append(result)
+    for spec in selected_arm_specs:
+        for seed in seeds:
+            result = run_arm(spec, base_cfg, seed=seed, use_seed_subdir=multi_seed)
+            results.append(result)
+
+    summary_rows = aggregate_by_arm_seed(results) if multi_seed else results
 
     # Load baseline eval if available
     baseline: dict | None = None
-    if BASELINE_EVAL_PATH.exists():
+    baseline_eval_path = Path(args.baseline_eval_path) if args.baseline_eval_path else None
+    if baseline_eval_path and baseline_eval_path.exists():
         try:
-            raw = json.loads(BASELINE_EVAL_PATH.read_text(encoding="utf-8"))
+            raw = json.loads(baseline_eval_path.read_text(encoding="utf-8"))
             # Augment with total-steps annotation
             raw["total_env_steps"] = (
                 base_cfg.num_satellites * 64 * 100  # horizon=64, 100 iters
@@ -218,14 +331,31 @@ def main() -> None:
             baseline = raw
         except Exception as exc:
             print(f"[warn] Could not load baseline metrics: {exc}")
+    elif baseline_eval_path:
+        print(f"[warn] Baseline file not found at: {baseline_eval_path}")
 
-    print_summary(results, baseline)
+    print_summary(summary_rows, baseline)
+
+    if multi_seed:
+        print("Per-seed run overview:")
+        for row in sorted(results, key=lambda x: (x["arm_name"], x["seed"])):
+            print(
+                "  "
+                f"{row['arm_name']} seed={row['seed']}: "
+                f"eval_reward={row['episode_reward']:.4f}, "
+                f"spacing_mean={row['spacing_error_mean']:.4f}, "
+                f"straightness_mean={row['straightness_mean']:.4f}"
+            )
 
     # Persist summary
-    summary_path = Path("outputs/ab_summary.json")
+    summary_path = Path(args.summary_path)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_payload = {
+        "seeds": seeds,
+        "multi_seed": multi_seed,
         "baseline": {"label": BASELINE_LABEL, **(baseline or {})},
-        "arms": results,
+        "arms": summary_rows,
+        "arm_runs": results,
     }
     summary_path.write_text(json.dumps(summary_payload, indent=2), encoding="utf-8")
     print(f"Summary written to {summary_path}")

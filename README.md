@@ -555,3 +555,21 @@ python main_line.py --num-satellites 1000
 python main_line.py --num-satellites 1000 --resume-mode latest
 ```
 
+**A/B horizon experiment** — compare rollout horizon effects with optional multi-seed aggregation:
+
+```bash
+# Default single-seed A/B run (seed 42)
+python ab_run_line.py
+
+# Multi-seed robust comparison with automatic mean/std aggregation
+python ab_run_line.py --seeds 42,1337,2025
+
+# Run only one arm and write a custom summary file
+python ab_run_line.py --arms horizon32_iter200 --summary-path outputs/ab_summary_iter200.json
+
+# Disable baseline loading (arms-only report)
+python ab_run_line.py --baseline-eval-path ""
+```
+
+In multi-seed mode, each run is written to seed-specific directories such as `outputs/ab_horizon32_iter200/seed1337/`, and the summary JSON includes both aggregated arm metrics and per-seed runs.
+
